@@ -27,7 +27,8 @@ enum RecordingState { notStarted, recording, paused, sending, finalizing, finish
 // ✅ STEP 1: Add the `WidgetsBindingObserver` mixin to your State class.
 class _PatientpageState extends State<Patientpage> with WidgetsBindingObserver {
   // --- Configuration ---
-  final String _serverBaseUrl = 'https://e818ee4942b3.ngrok-free.app/v1';
+  final String baseUrl = dotenv.env["BASE_API"] ?? "http://localhost:3000";
+  late final String _serverBaseUrl;
   final storageService = StorageService();
   final Dio _dio = Dio();
   final AudioRecorder _audioRecorder = AudioRecorder();
@@ -45,6 +46,7 @@ class _PatientpageState extends State<Patientpage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _serverBaseUrl = '$baseUrl/v1';
     _initializeAuthToken();
     // ✅ STEP 2: Register your state class as an observer for lifecycle events.
     WidgetsBinding.instance.addObserver(this);
