@@ -10,22 +10,22 @@ import 'package:path_provider/path_provider.dart';
 
 class Patientpage extends StatefulWidget {
   final String patientName;
-  final String patientId; // <-- ADDED: To hold the patient's unique ID.
+  final String patientId;
 
   const Patientpage({
     super.key,
     required this.patientName,
-    required this.patientId, // <-- ADDED: Make it required in the constructor.
+    required this.patientId,
   });
 
   @override
   State<Patientpage> createState() => _PatientpageState();
 }
 
-// Added a 'finished' state for after the recording is done.
 enum RecordingState { notStarted, recording, paused, sending, finalizing, finished }
 
-class _PatientpageState extends State<Patientpage> {
+// ✅ STEP 1: Add the `WidgetsBindingObserver` mixin to your State class.
+class _PatientpageState extends State<Patientpage> with WidgetsBindingObserver {
   // --- Configuration ---
   final String _serverBaseUrl = 'https://e818ee4942b3.ngrok-free.app/v1';
   final storageService = StorageService();
@@ -36,7 +36,7 @@ class _PatientpageState extends State<Patientpage> {
   String? _authToken;
   RecordingState _recordingState = RecordingState.notStarted;
   List<String> _transcripts = [];
-  String? _finalTranscript; // To hold the complete transcript after finalizing.
+  String? _finalTranscript;
   String? _sessionId;
   int _chunkCounter = 0;
   Timer? _chunkUploadTimer;
@@ -46,6 +46,8 @@ class _PatientpageState extends State<Patientpage> {
   void initState() {
     super.initState();
     _initializeAuthToken();
+    // ✅ STEP 2: Register your state class as an observer for lifecycle events.
+    WidgetsBinding.instance.addObserver(this);
   }
 
   Future<void> _initializeAuthToken() async {
@@ -59,10 +61,48 @@ class _PatientpageState extends State<Patientpage> {
   void dispose() {
     _chunkUploadTimer?.cancel();
     _audioRecorder.dispose();
+    // ✅ STEP 3: Unregister the observer to prevent memory leaks when the page is destroyed.
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
-  // --- Core Recording Logic ---
+  // ✅ STEP 4: Implement the `didChangeAppLifecycleState` method.
+  // This method is called whenever the app's state changes (e.g., goes to background).
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    log('App Lifecycle State: $state');
+    switch (state) {
+      // The app is not visible. This can be due to a phone call, locking the screen, or switching apps.
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+      case AppLifecycleState.hidden:
+        // We only want to auto-pause if a recording is actively in progress.
+        if (_recordingState == RecordingState.recording) {
+          _autoPauseRecording();
+        }
+        break;
+      // The app is visible and running. No action needed when returning.
+      case AppLifecycleState.resumed:
+        break;
+    }
+  }
+  
+  // ✅ STEP 5: Create a dedicated function to handle auto-pausing.
+  // This keeps the logic clean and separate from the user's manual pause action.
+  Future<void> _autoPauseRecording() async {
+    if (_recordingState != RecordingState.recording) return;
+
+    log('App is backgrounded. Auto-pausing recording...');
+    _chunkUploadTimer?.cancel();
+    await _audioRecorder.pause();
+    if (mounted) {
+      setState(() => _recordingState = RecordingState.paused);
+    }
+  }
+
+  // --- Core Recording Logic (No changes needed below this line) ---
 
   Future<void> _startRecording() async {
     if (!await _audioRecorder.hasPermission() || _authToken == null) {
@@ -70,22 +110,18 @@ class _PatientpageState extends State<Patientpage> {
       return;
     }
 
-    setState(() => _recordingState = RecordingState.sending); // Initializing state
+    setState(() => _recordingState = RecordingState.sending);
 
     try {
-      // 1. Create a session on the server
       final response = await _dio.post(
         '$_serverBaseUrl/upload-session',
         options: Options(headers: {'Authorization': 'Bearer $_authToken'}),
-        // --- FIX: Use the patient's ID, not their name.
         data: {'patientId': widget.patientId},
       );
       _sessionId = response.data['id'];
 
-      // 2. Start the first audio chunk recording
       await _startNewChunkRecording();
 
-      // 3. Start the timer to upload chunks every 10 seconds
       _chunkUploadTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
         _processAndUploadChunk(isLast: false);
       });
@@ -93,7 +129,7 @@ class _PatientpageState extends State<Patientpage> {
       setState(() {
         _recordingState = RecordingState.recording;
         _transcripts = [];
-        _finalTranscript = null; // Clear any previous final transcripts
+        _finalTranscript = null;
       });
     } catch (e) {
       log('Error starting recording session: $e');
@@ -149,19 +185,15 @@ class _PatientpageState extends State<Patientpage> {
     setState(() => _recordingState = RecordingState.finalizing);
     _chunkUploadTimer?.cancel();
     await _processAndUploadChunk(isLast: true);
-    // Transition to the 'finished' state to show save/discard buttons.
     if (mounted) {
       setState(() => _recordingState = RecordingState.finished);
     }
   }
 
-  // --- Server Communication ---
-
   Future<void> _uploadAudioChunk(File audioFile, int chunkNumberForUpload, {required bool isLast}) async {
     if (_sessionId == null) return;
     
     try {
-      // 1. Get presigned URL
       final presignedUrlResponse = await _dio.post(
         '$_serverBaseUrl/get-presigned-url',
         options: Options(headers: {'Authorization': 'Bearer $_authToken'}),
@@ -174,7 +206,6 @@ class _PatientpageState extends State<Patientpage> {
       final presignedUrl = presignedUrlResponse.data['presignedUrl'];
       final gcsPath = presignedUrlResponse.data['gcsPath'];
 
-      // 2. Upload file to GCS
       await _dio.put(
         presignedUrl,
         data: audioFile.openRead(),
@@ -184,19 +215,17 @@ class _PatientpageState extends State<Patientpage> {
         }),
       );
 
-      // 3. Notify server and get transcript
       final notifyResponse = await _dio.post(
         '$_serverBaseUrl/notify-chunk-uploaded',
         options: Options(headers: {'Authorization': 'Bearer $_authToken'}),
         data: {'sessionId': _sessionId, 'gcsPath': gcsPath, 'isLast': isLast},
       );
       
-      // If it's the last chunk, the server sends the full transcript.
       if (notifyResponse.data['isFinal'] == true) {
          if (mounted) {
           setState(() {
             _finalTranscript = notifyResponse.data['transcript'] as String?;
-            _transcripts.clear(); // Clear partials once we have the final version.
+            _transcripts.clear();
           });
         }
       } else {
@@ -215,7 +244,6 @@ class _PatientpageState extends State<Patientpage> {
     }
   }
   
-  // --- NEW: Function to save the final transcript to the patient record ---
   Future<void> _saveTranscriptToServer() async {
     final String url = "${dotenv.env["BASE_API"]}/v1/save-transcript";
     if (_sessionId == null || _finalTranscript == null) {
@@ -227,7 +255,6 @@ class _PatientpageState extends State<Patientpage> {
       await _dio.post(
         url,
         options: Options(headers: {'Authorization': 'Bearer $_authToken'}),
-        // --- FIX: Use the patient's ID, not their name.
         data: {
           'patientId': widget.patientId,
           'sessionId': _sessionId,
@@ -238,7 +265,7 @@ class _PatientpageState extends State<Patientpage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Transcript saved successfully!'), backgroundColor: Colors.green),
       );
-      _resetState(); // Reset the UI for a new recording.
+      _resetState();
 
     } catch (e) {
       log('Error saving transcript: $e');
@@ -248,7 +275,6 @@ class _PatientpageState extends State<Patientpage> {
     }
   }
   
-  // --- State Management Helpers ---
   void _resetState() {
     _chunkUploadTimer?.cancel();
     if(mounted) {
@@ -283,7 +309,6 @@ class _PatientpageState extends State<Patientpage> {
   }
 
   Widget _buildTranscriptArea() {
-    // Show final transcript if it exists
     if (_finalTranscript != null) {
        return Container(
           padding: const EdgeInsets.all(12),
@@ -363,20 +388,19 @@ class _PatientpageState extends State<Patientpage> {
         return const Column(
           children: [CircularProgressIndicator(), SizedBox(height: 10), Text('Finalizing recording...')],
         );
-      // --- NEW UI STATE ---
       case RecordingState.finished:
         return Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             ElevatedButton.icon(
-              onPressed: _resetState, // Discard
+              onPressed: _resetState,
               icon: const Icon(Icons.delete_outline),
               label: const Text('Discard'),
               style: ElevatedButton.styleFrom(backgroundColor: Colors.grey, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12)),
             ),
             const SizedBox(width: 20),
             ElevatedButton.icon(
-              onPressed: _saveTranscriptToServer, // Save
+              onPressed: _saveTranscriptToServer,
               icon: const Icon(Icons.save_alt),
               label: const Text('Save Transcript'),
               style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12)),
@@ -386,4 +410,3 @@ class _PatientpageState extends State<Patientpage> {
     }
   }
 }
-
