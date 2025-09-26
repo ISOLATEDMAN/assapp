@@ -1,9 +1,13 @@
+// patient_page_with_bloc.dart
 import 'dart:async';
 import 'dart:developer';
 import 'dart:io';
+import 'package:assapp/blocs/PatientBloc/bloc/patient_handling_bloc.dart';
 import 'package:assapp/services/StorageService/StorageService.dart';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
@@ -24,7 +28,6 @@ class Patientpage extends StatefulWidget {
 
 enum RecordingState { notStarted, recording, paused, sending, finalizing, finished }
 
-// ✅ STEP 1: Add the `WidgetsBindingObserver` mixin to your State class.
 class _PatientpageState extends State<Patientpage> with WidgetsBindingObserver {
   // --- Configuration ---
   final String baseUrl = dotenv.env["BASE_API"] ?? "http://localhost:3000";
@@ -48,7 +51,6 @@ class _PatientpageState extends State<Patientpage> with WidgetsBindingObserver {
     super.initState();
     _serverBaseUrl = '$baseUrl/v1';
     _initializeAuthToken();
-    // ✅ STEP 2: Register your state class as an observer for lifecycle events.
     WidgetsBinding.instance.addObserver(this);
   }
 
@@ -63,36 +65,28 @@ class _PatientpageState extends State<Patientpage> with WidgetsBindingObserver {
   void dispose() {
     _chunkUploadTimer?.cancel();
     _audioRecorder.dispose();
-    // ✅ STEP 3: Unregister the observer to prevent memory leaks when the page is destroyed.
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
-  // ✅ STEP 4: Implement the `didChangeAppLifecycleState` method.
-  // This method is called whenever the app's state changes (e.g., goes to background).
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     log('App Lifecycle State: $state');
     switch (state) {
-      // The app is not visible. This can be due to a phone call, locking the screen, or switching apps.
       case AppLifecycleState.inactive:
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
       case AppLifecycleState.hidden:
-        // We only want to auto-pause if a recording is actively in progress.
         if (_recordingState == RecordingState.recording) {
           _autoPauseRecording();
         }
         break;
-      // The app is visible and running. No action needed when returning.
       case AppLifecycleState.resumed:
         break;
     }
   }
   
-  // ✅ STEP 5: Create a dedicated function to handle auto-pausing.
-  // This keeps the logic clean and separate from the user's manual pause action.
   Future<void> _autoPauseRecording() async {
     if (_recordingState != RecordingState.recording) return;
 
@@ -104,7 +98,7 @@ class _PatientpageState extends State<Patientpage> with WidgetsBindingObserver {
     }
   }
 
-  // --- Core Recording Logic (No changes needed below this line) ---
+  // --- Core Recording Logic ---
 
   Future<void> _startRecording() async {
     if (!await _audioRecorder.hasPermission() || _authToken == null) {
@@ -246,35 +240,19 @@ class _PatientpageState extends State<Patientpage> with WidgetsBindingObserver {
     }
   }
   
+  // Updated method to use BLoC for saving transcript
   Future<void> _saveTranscriptToServer() async {
-    final String url = "${dotenv.env["BASE_API"]}/v1/save-transcript";
     if (_sessionId == null || _finalTranscript == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No transcript to save.')));
       return;
     }
     
-    try {
-      await _dio.post(
-        url,
-        options: Options(headers: {'Authorization': 'Bearer $_authToken'}),
-        data: {
-          'patientId': widget.patientId,
-          'sessionId': _sessionId,
-          'transcript': _finalTranscript,
-        },
-      );
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Transcript saved successfully!'), backgroundColor: Colors.green),
-      );
-      _resetState();
-
-    } catch (e) {
-      log('Error saving transcript: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Error: Could not save transcript.'), backgroundColor: Colors.red),
-      );
-    }
+    // Use BLoC to save transcript
+    context.read<PatientHandlingBloc>().add(SaveTranscriptEvent(
+      patientId: widget.patientId,
+      sessionId: _sessionId!,
+      transcript: _finalTranscript!,
+    ));
   }
   
   void _resetState() {
@@ -295,15 +273,48 @@ class _PatientpageState extends State<Patientpage> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(widget.patientName)),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            children: [
-              Expanded(child: _buildTranscriptArea()),
-              const SizedBox(height: 20),
-              _buildControlButtons(),
-            ],
+      body: BlocListener<PatientHandlingBloc, PatientHandlingState>(
+        listener: (context, state) {
+          if (state is TranscriptSavedState) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Transcript saved successfully!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+            _resetState();
+          } else if (state is PatientErrorState) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error: ${state.message}'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        },
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              children: [
+                Expanded(child: _buildTranscriptArea()),
+                const SizedBox(height: 20),
+                BlocBuilder<PatientHandlingBloc, PatientHandlingState>(
+                  builder: (context, state) {
+                    if (state is TranscriptSavingState) {
+                      return const Column(
+                        children: [
+                          CircularProgressIndicator(),
+                          SizedBox(height: 10),
+                          Text('Saving transcript...'),
+                        ],
+                      );
+                    }
+                    return _buildControlButtons();
+                  },
+                ),
+              ],
+            ),
           ),
         ),
       ),

@@ -1,9 +1,11 @@
+// home_page_with_bloc.dart
+import 'package:assapp/blocs/PatientBloc/bloc/patient_handling_bloc.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+
+import 'package:assapp/models/Patient/Patient_model.dart';
 import 'package:assapp/pages/patient/PatientPage.dart';
 import 'package:assapp/pages/patient/TranscriptsPage.dart';
-
-import 'package:assapp/services/PatientService/PatientService.dart';
-import 'package:assapp/models/Patient/Patient_model.dart';
-import 'package:flutter/material.dart';
 
 class Home extends StatefulWidget {
   const Home({super.key});
@@ -13,27 +15,13 @@ class Home extends StatefulWidget {
 }
 
 class _HomeState extends State<Home> {
-  List<PatientModel> _patients = [];
-  bool _isLoading = true;
-
   @override
   void initState() {
     super.initState();
-    _loadPatients();
+    // Load patients when the page initializes
+    context.read<PatientHandlingBloc>().add(LoadPatientsEvent());
   }
 
-  Future<void> _loadPatients() async {
-    setState(() => _isLoading = true);
-    final PatientService patientService = PatientService();
-    // This call now fetches patients AND their associated transcripts
-    final patients = await patientService.getPatients();
-    setState(() {
-      _patients = patients;
-      _isLoading = false;
-    });
-  }
-
-  // ... (Your _showCreatePatientDialog function remains the same) ...
   Future<void> _showCreatePatientDialog() async {
     final nameController = TextEditingController();
     
@@ -68,48 +56,16 @@ class _HomeState extends State<Home> {
     );
 
     if (newPatientName != null && newPatientName.isNotEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Creating patient...')),
+      // Trigger the BLoC event to create patient
+      context.read<PatientHandlingBloc>().add(
+        CreatePatientEvent(patientName: newPatientName),
       );
-
-      final PatientService patientService = PatientService();
-      final PatientModel? newPatient = await patientService.createPatient(newPatientName);
-      
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-      if (newPatient != null) {
-        setState(() {
-          _patients.add(newPatient);
-        });
-        
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Patient created successfully!'),
-            backgroundColor: Colors.green,
-          ),
-        );
-        
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => Patientpage(
-              patientName: newPatient.name,
-              patientId: newPatient.id,
-            ),
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to create patient. Please try again.'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
     }
   }
 
+  void _onRefreshPatients() {
+    context.read<PatientHandlingBloc>().add(RefreshPatientsEvent());
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -119,7 +75,7 @@ class _HomeState extends State<Home> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loadPatients,
+            onPressed: _onRefreshPatients,
           ),
         ],
       ),
@@ -143,62 +99,137 @@ class _HomeState extends State<Home> {
             ),
             const Divider(),
             Expanded(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _patients.isEmpty
-                      ? const Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.person_off_outlined, size: 64, color: Colors.grey),
-                              SizedBox(height: 16),
-                              Text(
-                                'No patients found',
-                                style: TextStyle(color: Colors.grey, fontSize: 16),
-                              ),
-                            ],
-                          ),
-                        )
-                      : ListView.builder(
-                          itemCount: _patients.length,
-                          itemBuilder: (context, index) {
-                            final patient = _patients[index];
-                            return Card(
-                              child: ListTile(
-                                leading: const Icon(Icons.person_outline),
-                                title: Text(patient.name),
-                                subtitle: Text('ID: ${patient.id}'),
-                                // ✅ MODIFICATION: The whole tile still navigates to a new session.
-                                onTap: () {
-                                  Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) => Patientpage(
-                                        patientName: patient.name,
-                                        patientId: patient.id,
-                                      ),
-                                    ),
-                                  );
-                                },
-                                // ✅ MODIFICATION: The trailing icon is now a button for history.
-                                trailing: IconButton(
-                                  icon: const Icon(Icons.history),
-                                  tooltip: 'View Transcripts',
-                                  onPressed: () {
-                                    // Navigate and pass the patient's existing transcript list.
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (_) => TranscriptsPage(
-                                          patientName: patient.name,
-                                          transcripts: patient.transcripts,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                            );
-                          },
+              child: BlocConsumer<PatientHandlingBloc, PatientHandlingState>(
+                listener: (context, state) {
+                  if (state is PatientCreatedState) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Patient created successfully!'),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                    
+                    // Navigate to the new patient's page
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => Patientpage(
+                          patientName: state.patient.name,
+                          patientId: state.patient.id,
                         ),
+                      ),
+                    );
+                  } else if (state is PatientErrorState) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(state.message),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                },
+                builder: (context, state) {
+                  if (state is PatientLoadingState) {
+                    return const Center(child: CircularProgressIndicator());
+                  } else if (state is PatientCreatingState) {
+                    return const Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          CircularProgressIndicator(),
+                          SizedBox(height: 16),
+                          Text('Creating patient...'),
+                        ],
+                      ),
+                    );
+                  } else if (state is PatientLoadedState || state is PatientCreatedState) {
+                    List<PatientModel> patients = [];
+                    
+                    if (state is PatientLoadedState) {
+                      patients = state.patients;
+                    } else if (state is PatientCreatedState) {
+                      patients = state.allPatients;
+                    }
+                    
+                    if (patients.isEmpty) {
+                      return const Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.person_off_outlined, size: 64, color: Colors.grey),
+                            SizedBox(height: 16),
+                            Text(
+                              'No patients found',
+                              style: TextStyle(color: Colors.grey, fontSize: 16),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+                    
+                    return ListView.builder(
+                      itemCount: patients.length,
+                      itemBuilder: (context, index) {
+                        final patient = patients[index];
+                        return Card(
+                          child: ListTile(
+                            leading: const Icon(Icons.person_outline),
+                            title: Text(patient.name),
+                            subtitle: Text('ID: ${patient.id}'),
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => Patientpage(
+                                    patientName: patient.name,
+                                    patientId: patient.id,
+                                  ),
+                                ),
+                              );
+                            },
+                            trailing: IconButton(
+                              icon: const Icon(Icons.history),
+                              tooltip: 'View Transcripts',
+                              onPressed: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => TranscriptsPage(
+                                      patientName: patient.name,
+                                      transcripts: patient.transcripts,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  } else if (state is PatientErrorState) {
+                    return Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.error_outline, size: 64, color: Colors.red),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Error: ${state.message}',
+                            style: const TextStyle(color: Colors.red, fontSize: 16),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 16),
+                          ElevatedButton(
+                            onPressed: _onRefreshPatients,
+                            child: const Text('Retry'),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                  
+                  return const Center(
+                    child: Text('Initialize patients...'),
+                  );
+                },
+              ),
             ),
           ],
         ),

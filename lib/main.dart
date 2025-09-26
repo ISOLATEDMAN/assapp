@@ -1,4 +1,5 @@
 import 'package:assapp/blocs/AuthBloc/bloc/auths_bloc.dart';
+import 'package:assapp/blocs/PatientBloc/bloc/patient_handling_bloc.dart';
 import 'package:assapp/pages/auths/login.dart';
 import 'package:assapp/services/StorageService/StorageService.dart';
 import 'package:assapp/services/authService/AuthServie.dart';
@@ -24,9 +25,14 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiBlocProvider(
       providers: [
-        BlocProvider(create: (context)=>AuthsBloc(authService: AuthService(storageService: StorageService())))
+        BlocProvider(create: (context)=>AuthsBloc(authService: AuthService(storageService: StorageService()))),
+        BlocProvider(create: (context)=>PatientHandlingBloc())
       ],
-      child: const MaterialApp(
+      child: MaterialApp(
+        theme: ThemeData(
+          primarySwatch: Colors.blue,
+          visualDensity: VisualDensity.adaptivePlatformDensity,
+        ),
         home: LoginScreen(),
       ),
     );

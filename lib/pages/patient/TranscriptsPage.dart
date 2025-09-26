@@ -1,5 +1,4 @@
 import 'package:assapp/models/Patient/PatientTranscriptModel.dart';
-import 'package:assapp/models/Patient/Patient_model.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
